@@ -19,6 +19,8 @@
 
 **Documentation:** [DSPy Docs](https://dspy-docs.vercel.app/)
 
+**How is DSPy Used?:** [DSPy Use Cases](https://dspy-docs.vercel.app/docs/dspy-usecases)
+
 [![Downloads](https://static.pepy.tech/badge/dspy-ai)](https://pepy.tech/project/dspy-ai)  [![Downloads](https://static.pepy.tech/badge/dspy-ai/month)](https://pepy.tech/project/dspy-ai)
 
 ----
@@ -28,7 +30,6 @@
 To make this more systematic and much more powerful, **DSPy** does two things. First, it separates the flow of your program (`modules`) from the parameters (LM prompts and weights) of each step. Second, **DSPy** introduces new `optimizers`, which are LM-driven algorithms that can tune the prompts and/or the weights of your LM calls, given a `metric` you want to maximize.
 
 **DSPy** can routinely teach powerful models like `GPT-3.5` or `GPT-4` and local models like `T5-base` or `Llama2-13b` to be much more reliable at tasks, i.e. having higher quality and/or avoiding specific failure patterns. **DSPy** optimizers will "compile" the _same_ program into _different_ instructions, few-shot prompts, and/or weight updates (finetunes) for each LM. This is a new paradigm in which LMs and their prompts fade into the background as optimizable pieces of a larger system that can learn from data. **tldr;** less prompting, higher scores, and a more systematic approach to solving hard tasks with LMs.
-
 
 ### Table of Contents
 
@@ -40,8 +41,6 @@ If you need help thinking about your task, we recently created a [Discord server
 1. **[Compiling: Two Powerful Concepts](#4-two-powerful-concepts-signatures--teleprompters)**
 1. **[Pydantic Types](#5-pydantic-types)** 
 1. **[FAQ: Is DSPy right for me?](#6-faq-is-dspy-right-for-me)**
-
-
 
 ### Analogy to Neural Networks
 
@@ -259,7 +258,7 @@ class GenerateSearchQuery(dspy.Signature):
 self.generate_answer = dspy.ChainOfThought(GenerateSearchQuery)
 ```
 
-You can optionally provide a `prefix` and/or `desc` key for each input or output field to refine or constraint the behavior of modules using your signature. The description of the sub-task itself is specified as the docstring (i.e., `"""Write a simple..."""`).
+You can optionally provide a `prefix` and/or `desc` key for each input or output field to refine or constrain the behavior of modules using your signature. The description of the sub-task itself is specified as the docstring (i.e., `"""Write a simple..."""`).
 
 
 #### 4.b) Asking **DSPy** to automatically optimize your program with `dspy.teleprompt.*`
@@ -370,7 +369,7 @@ If you're a NLP/AI researcher (or a practitioner exploring new pipelines or new 
 
 ####
 <details>
-  <summary><h4 style="display: inline">[5.a] DSPy vs. thin wrappers for prompts (OpenAI API, MiniChain, basic templating)</h4></summary>
+  <summary><h4 style="display: inline">[6.a] DSPy vs. thin wrappers for prompts (OpenAI API, MiniChain, basic templating)</h4></summary>
 
 In other words: _Why can't I just write my prompts directly as string templates?_ Well, for extremely simple settings, this _might_ work just fine. (If you're familiar with neural networks, this is like expressing a tiny two-layer NN as a Python for-loop. It kinda works.)
 
@@ -384,7 +383,7 @@ Oh, and you wouldn't need to maintain long, brittle, model-specific strings at t
 
 ####
 <details>
-  <summary><h4 style="display: inline">[5.b] DSPy vs. application development libraries like LangChain, LlamaIndex</h4></summary>
+  <summary><h4 style="display: inline">[6.b] DSPy vs. application development libraries like LangChain, LlamaIndex</h4></summary>
 
 
 > _Note: If you use LangChain as a thin wrapper around your own prompt strings, refer to answer [5.a] instead._
@@ -403,7 +402,7 @@ If you're familiar with neural networks:
 
 ####
 <details>
-  <summary><h4 style="display: inline">[5.c] DSPy vs. generation control libraries like Guidance, LMQL, RELM, Outlines</h4></summary>
+  <summary><h4 style="display: inline">[6.c] DSPy vs. generation control libraries like Guidance, LMQL, RELM, Outlines</h4></summary>
 
 
 Guidance, LMQL, RELM, and Outlines are all exciting new libraries for controlling the individual completions of LMs, e.g., if you want to enforce JSON output schema or constrain sampling to a particular regular expression.
@@ -435,13 +434,23 @@ poetry run pytest tests/PATH_TO_TEST_SUITE
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for a quickstart guide to contributing to DSPy.
 
-## Contributors & Acknowledgements
+## Team, Contributors, & Acknowledgements
 
-**DSPy** is led by **Omar Khattab** at Stanford NLP with **Chris Potts** and **Matei Zaharia**.
+Project Lead: **Omar Khattab**  
 
-Key contributors and team members include **Arnav Singhvi**, **Krista Opsahl-Ong**, **Michael Ryan**, **Cyrus Nouroozi**, **Kyle Caverly**, **Amir Mehr**, **Josh Purtell**, **Shangyin Tan**, **Manish Shetty**, **Herumb Shandilya**, **Karel D'Oosterlinck**, **Paridhi Maheshwari**, **Keshav Santhanam**, **Sri Vardhamanan**, **Eric Zhang**, **Hanna Moazam**, **Thomas Joshi**, **Saiful Haq**, and **Ashutosh Sharma**.
+Project Mentors: **Chris Potts**, **Matei Zaharia**, **Heather Miller**  
 
-**DSPy** includes important contributions from **Rick Battle** and **Igor Kotenkov**. It reflects discussions with **Peter Zhong**, **Haoze He**, **Lisa Li**, **David Hall**, **Ashwin Paranjape**, **Heather Miller**, **Chris Manning**, **Percy Liang**, and many others.
+Core Library: **Arnav Singhvi**, **Herumb Shandilya**, **Sri Vardhamanan**,  **Cyrus Nouroozi**, **Amir Mehr**, **Kyle Caverly**, with special thanks to **Keshav Santhanam**, **Thomas Ahle**, **Connor Shorten**
+
+Prompt Optimization: **Krista Opsahl-Ong**, **Michael Ryan**, **Josh Purtell**, with special thanks to **Karel D'Oosterlinck**, **Eric Zhang**
+
+Finetuning & RL: **Dilara Soylu**, **Isaac Miller**, **Souradip Chakraborty**
+
+PL Abstractions: **Shangyin Tan**, **Manish Shetty**, **Peter Zhong**  
+
+Applications: **Jasper Xian**, **Saron Samuel**, **Alberto Mancarella**, **Faraz Khoubsirat**, **Saiful Haq**, **Ashutosh Sharma**  
+
+Special thanks to **Rick Battle**, **Dhar Rawal**, **Insop Song**, **Tom Dorr**, **Igor Kotenkov**, **Corey Zumar**, **Lisa Li**, **David Hall**, **Ashwin Paranjape**, **Chris Manning**, **Avi Sil**.
 
 The **DSPy** logo is designed by **Chuyi Zhang**.
 
