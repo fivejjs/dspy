@@ -9,10 +9,13 @@ from .utils.logging import logger, set_log_output
 
 # Functional must be imported after primitives, predict and signatures
 from .functional import *  # isort: skip
+from dspy.evaluate import Evaluate # isort: skip
+from dspy.clients import * # isort: skip
+from dspy.adapters import * # isort: skip
 
 settings = dsp.settings
 
-LM = dsp.LM
+# LM = dsp.LM
 
 AzureOpenAI = dsp.AzureOpenAI
 OpenAI = dsp.GPT3
@@ -55,3 +58,18 @@ You = dsp.You
 
 configure = settings.configure
 context = settings.context
+
+
+import dspy.teleprompt
+
+LabeledFewShot = dspy.teleprompt.LabeledFewShot
+BootstrapFewShot = dspy.teleprompt.BootstrapFewShot
+BootstrapFewShotWithRandomSearch = dspy.teleprompt.BootstrapFewShotWithRandomSearch
+BootstrapRS = dspy.teleprompt.BootstrapFewShotWithRandomSearch
+COPRO = dspy.teleprompt.COPRO
+MIPROv2 = dspy.teleprompt.MIPROv2
+Ensemble = dspy.teleprompt.Ensemble
+
+
+def inspect_history(*args, **kwargs):
+    return settings.lm.inspect_history(*args, **kwargs)
