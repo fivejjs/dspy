@@ -9,12 +9,20 @@ from dspy.primitives.program import Module
 from dspy.primitives.prediction import Prediction
 from dspy.signatures.signature import ensure_signature, signature_to_template
 
+import logging
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def warn_once(msg: str):
+    logging.warning(msg)
+
 
 class Predict(Module, Parameter):
-    def __init__(self, signature, **config):
+    def __init__(self, signature, _parse_values=True, **config):
         self.stage = random.randbytes(8).hex()
         self.signature = ensure_signature(signature)
         self.config = config
+        self._parse_values = _parse_values
         self.reset()
 
     def reset(self):
@@ -121,11 +129,19 @@ class Predict(Module, Parameter):
 
         import dspy
         if isinstance(lm, dspy.LM):
-            completions = v2_5_generate(lm, config, signature, demos, kwargs)
-        elif dsp.settings.experimental:
-            completions = new_generate(lm, signature, dsp.Example(demos=demos, **kwargs), **config)
+            completions = v2_5_generate(lm, config, signature, demos, kwargs, _parse_values=self._parse_values)
         else:
-            completions = old_generate(demos, signature, kwargs, config, self.lm, self.stage)
+            warn_once("\t*** In DSPy 2.5, all LM clients except `dspy.LM` are deprecated. ***\n"
+                      f" \t\tYou are using the client {lm.__class__.__name__}, which will be removed in DSPy 2.6.\n"
+                      " \t\tChanging the client is straightforward and will let you use new features (Adapters) that"
+                      " improve the consistency of LM outputs, especially when using chat LMs. \n\n"
+                      " \t\tLearn more about the changes and how to migrate at\n"
+                      " \t\thttps://github.com/stanfordnlp/dspy/blob/main/examples/migration.ipynb")
+
+            if dsp.settings.experimental:
+                completions = new_generate(lm, signature, dsp.Example(demos=demos, **kwargs), **config)
+            else:
+                completions = old_generate(demos, signature, kwargs, config, self.lm, self.stage)
 
         pred = Prediction.from_completions(completions, signature=signature)
 
@@ -209,11 +225,11 @@ def new_generate(lm, signature, example, max_depth=6, **kwargs):
     return completions
 
 
-def v2_5_generate(lm, lm_kwargs, signature, demos, inputs):
+def v2_5_generate(lm, lm_kwargs, signature, demos, inputs, _parse_values=True):
     import dspy
     adapter = dspy.settings.adapter or dspy.ChatAdapter()
 
-    return adapter(lm, lm_kwargs=lm_kwargs, signature=signature, demos=demos, inputs=inputs)
+    return adapter(lm, lm_kwargs=lm_kwargs, signature=signature, demos=demos, inputs=inputs, _parse_values=_parse_values)
     
 
 
