@@ -12,15 +12,15 @@ setup(
     #replace_package_name_marker
     name="dspy",
     #replace_package_version_marker
-    version="2.5.5", 	
+    version="2.5.43", 	
     description="DSPy",	
     long_description=long_description,	
     long_description_content_type="text/markdown",	
-    url="https://github.com/stanfordnlp/dsp",	
+    url="https://github.com/stanfordnlp/dspy",	
     author="Omar Khattab",	
     author_email="okhattab@stanford.edu",	
     license="MIT License",	
-    packages=find_packages(include=["dsp.*", "dspy.*", "dsp", "dspy"]),	
+    packages=find_packages(include=["dspy.*", "dspy"]),	
     python_requires=">=3.9",	
     install_requires=requirements,	
 
@@ -40,7 +40,8 @@ setup(
         "fastembed": ["fastembed"],
         "groq": ["groq~=0.8.0"],
         "langfuse": ["langfuse~=2.36.1"],
-        "pgvector": ["psycopg2~=2.9.9","pgvector~=0.2.5"]
+        "pgvector": ["psycopg2~=2.9.9","pgvector~=0.2.5"],
+        "falkordb": ["falkordb", "redis", "async-timeout"]
     },
     classifiers=[	
         "Development Status :: 3 - Alpha",	
