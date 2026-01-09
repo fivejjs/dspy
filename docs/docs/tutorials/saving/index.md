@@ -7,7 +7,7 @@ This guide demonstrates how to save and load your DSPy program. At a high level,
 
 ## State-only Saving
 
-State represents the DSPy program's internal state, including the signature, demos (few-shot examples), and other informaiton like
+State represents the DSPy program's internal state, including the signature, demos (few-shot examples), and other information like
 the `lm` to use for each `dspy.Predict` in the program. It also includes configurable attributes of other DSPy modules like
 `k` for `dspy.retrievers.Retriever`. To save the state of a program, use the `save` method and set `save_program=False`. You can
 choose to save the state to a JSON file or a pickle file. We recommend saving the state to a JSON file because it is safer and readable.
@@ -20,7 +20,7 @@ Let's say we have compiled a program with some data, and we want to save the pro
 import dspy
 from dspy.datasets.gsm8k import GSM8K, gsm8k_metric
 
-dspy.settings.configure(lm=dspy.LM("openai/gpt-4o-mini"))
+dspy.configure(lm=dspy.LM("openai/gpt-4o-mini"))
 
 gsm8k = GSM8K()
 gsm8k_trainset = gsm8k.train[:10]
@@ -37,6 +37,9 @@ compiled_dspy_program.save("./dspy_program/program.json", save_program=False)
 ```
 
 To save the state of your program to a pickle file:
+
+!!! danger "Security Warning: Pickle Files Can Execute Arbitrary Code"
+    Loading `.pkl` files can execute arbitrary code and may be dangerous. Only load pickle files from trusted sources in secure environments. **Prefer using `.json` files whenever possible**. If you must use pickle files, ensure you trust the source and use the `allow_pickle=True` parameter when loading.
 
 ```python
 compiled_dspy_program.save("./dspy_program/program.pkl", save_program=False)
@@ -57,9 +60,12 @@ assert str(compiled_dspy_program.signature) == str(loaded_dspy_program.signature
 
 Or load the state from a pickle file:
 
+!!! danger "Security Warning"
+    Remember to use `allow_pickle=True` when loading pickle files, and only load from trusted sources.
+
 ```python
 loaded_dspy_program = dspy.ChainOfThought("question -> answer") # Recreate the same program.
-loaded_dspy_program.load("./dspy_program/program.pkl")
+loaded_dspy_program.load("./dspy_program/program.pkl", allow_pickle=True)
 
 assert len(compiled_dspy_program.demos) == len(loaded_dspy_program.demos)
 for original_demo, loaded_demo in zip(compiled_dspy_program.demos, loaded_dspy_program.demos):
@@ -69,6 +75,9 @@ assert str(compiled_dspy_program.signature) == str(loaded_dspy_program.signature
 ```
 
 ## Whole Program Saving
+
+!!! warning "Security Notice: Whole Program Saving Uses Pickle"
+    Whole program saving uses `cloudpickle` for serialization, which has the same security risks as pickle files. Only load programs from trusted sources in secure environments.
 
 Starting from `dspy>=2.6.0`, DSPy supports saving the whole program, including the architecture and the state. This feature
 is powered by `cloudpickle`, which is a library for serializing and deserializing Python objects.
@@ -94,14 +103,47 @@ assert str(compiled_dspy_program.signature) == str(loaded_dspy_program.signature
 ```
 
 With whole program saving, you don't need to recreate the program, but can directly load the architecture along with the state.
-You can pick the suitable saviing approach based on your needs.
+You can pick the suitable saving approach based on your needs.
+
+### Serializing Imported Modules
+
+When saving a program with `save_program=True`, you might need to include custom modules that your program depends on. This is
+necessary if your program depends on these modules, but at loading time these modules are not imported before calling `dspy.load`.
+
+You can specify which custom modules should be serialized with your program by passing them to the `modules_to_serialize`
+parameter when calling `save`. This ensures that any dependencies your program relies on are included during serialization and
+available when loading the program later.
+
+Under the hood this uses cloudpickle's `cloudpickle.register_pickle_by_value` function to register a module as picklable by value.
+When a module is registered this way, cloudpickle will serialize the module by value rather than by reference, ensuring that the
+module contents are preserved with the saved program.
+
+For example, if your program uses custom modules:
+
+```python
+import dspy
+import my_custom_module
+
+compiled_dspy_program = dspy.ChainOfThought(my_custom_module.custom_signature)
+
+# Save the program with the custom module
+compiled_dspy_program.save(
+    "./dspy_program/",
+    save_program=True,
+    modules_to_serialize=[my_custom_module]
+)
+```
+
+This ensures that the required modules are properly serialized and available when loading the program later. Any number of
+modules can be passed to `modules_to_serialize`. If you don't specify `modules_to_serialize`, no additional modules will be
+registered for serialization.
 
 ## Backward Compatibility
 
-As of `dspy<2.7`, we don't guarantee the backward compatibility of the saved program. For example, if you save the program with `dspy==2.5.35`,
+As of `dspy<3.0.0`, we don't guarantee the backward compatibility of the saved program. For example, if you save the program with `dspy==2.5.35`,
 at loading time please make sure to use the same version of DSPy to load the program, otherwise the program may not work as expected. Chances
 are that loading a saved file in a different version of DSPy will not raise an error, but the performance could be different from when
 the program was saved.
 
-Starting from `dspy>=2.7`, we will guarantee the backward compatibility of the saved program in major releases, i.e., programs saved in `dspy==2.7.0`
-should be loadeable in `dspy==2.7.10`.
+Starting from `dspy>=3.0.0`, we will guarantee the backward compatibility of the saved program in major releases, i.e., programs saved in `dspy==3.0.0`
+should be loadable in `dspy==3.7.10`.

@@ -20,7 +20,7 @@ eval_score = evaluate(compiled_prompt_opt, devset=evalset[:EVAL_NUM], **kwargs)
 
 Note that this teleprompter takes in the following parameters:
 
-* prompt_model: The model used for prompt generation. When unspecified, defaults to the model set in settings (ie. dspy.settings.configure(lm=task_model)).
+* prompt_model: The model used for prompt generation. When unspecified, defaults to the model set in settings (ie. dspy.configure(lm=task_model)).
 * metric: The task metric used for optimization.
 * breadth: The number of new prompts to generate at each iteration. Default=10.
 * depth: The number of times we should ask our prompt model to generate new prompts, with the history of the past prompts as input. Default=3.
@@ -77,7 +77,7 @@ class COPRO(Teleprompter):
         self.track_stats = track_stats
 
     def _check_candidates_equal(self, candidate1, candidate2):
-        for p1, p2 in zip(candidate1["program"].predictors(), candidate2["program"].predictors()):
+        for p1, p2 in zip(candidate1["program"].predictors(), candidate2["program"].predictors(), strict=False):
             if self._get_signature(p1).instructions != self._get_signature(p2).instructions:
                 return False
             *_, p1_last_field = self._get_signature(p1).fields.values()
@@ -156,7 +156,7 @@ class COPRO(Teleprompter):
             basic_instruction = self._get_signature(predictor).instructions
             basic_prefix = self._get_signature(predictor).fields[last_key].json_schema_extra["prefix"]
             if self.prompt_model:
-                with dspy.settings.context(lm=self.prompt_model):
+                with dspy.context(lm=self.prompt_model):
                     instruct = dspy.Predict(
                         BasicGenerateInstruction,
                         n=self.breadth - 1,
@@ -191,7 +191,7 @@ class COPRO(Teleprompter):
             latest_scores = []
 
             # Go through our module's predictors
-            for p_i, (p_old, p_new) in enumerate(zip(module.predictors(), module_clone.predictors())):
+            for p_i, (p_old, p_new) in enumerate(zip(module.predictors(), module_clone.predictors(), strict=False)):
                 candidates_ = latest_candidates[id(p_old)]  # Use the most recently generated candidates for evaluation
                 if len(module.predictors()) > 1:
                     # Unless our program has multiple predictors, in which case we need to reevaluate all prompts with
@@ -225,7 +225,7 @@ class COPRO(Teleprompter):
                         f"At Depth {d+1}/{self.depth}, Evaluating Prompt Candidate #{c_i+1}/{len(candidates_)} for "
                         f"Predictor {p_i+1} of {len(module.predictors())}.",
                     )
-                    score = evaluate(module_clone, devset=trainset, **eval_kwargs)
+                    score = evaluate(module_clone, devset=trainset, **eval_kwargs).score
                     if self.prompt_model:
                         logger.debug(f"prompt_model.inspect_history(n=1) {self.prompt_model.inspect_history(n=1)}")
                     total_calls += 1
@@ -306,7 +306,7 @@ class COPRO(Teleprompter):
 
                 # Generate next batch of potential prompts to optimize, with previous attempts as input
                 if self.prompt_model:
-                    with dspy.settings.context(lm=self.prompt_model):
+                    with dspy.context(lm=self.prompt_model):
                         instr = dspy.Predict(
                             GenerateInstructionGivenAttempts,
                             n=self.breadth,
@@ -319,10 +319,6 @@ class COPRO(Teleprompter):
                         temperature=self.init_temperature,
                     )(attempted_instructions=attempts)
 
-                if self.prompt_model:
-                    logger.debug(
-                        f"(self.prompt_model.inspect_history(n=1)) {self.prompt_model.inspect_history(n=1)}"
-                    )
                 # Get candidates for each predictor
                 new_candidates[id(p_base)] = instr.completions
                 all_candidates[id(p_base)].proposed_instruction.extend(instr.completions.proposed_instruction)
@@ -330,8 +326,6 @@ class COPRO(Teleprompter):
                     instr.completions.proposed_prefix_for_output_field,
                 )
 
-            if self.prompt_model:
-                logger.debug(f"{self.prompt_model.inspect_history(n=1)}")
             latest_candidates = new_candidates
 
         candidates = []

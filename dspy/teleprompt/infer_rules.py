@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class InferRules(BootstrapFewShot):
-    def __init__(self, num_candidates=10, num_rules=10, num_threads=8, teacher_settings=None, **kwargs):
+    def __init__(self, num_candidates=10, num_rules=10, num_threads=None, teacher_settings=None, **kwargs):
         super().__init__(teacher_settings=teacher_settings, **kwargs)
 
         self.num_candidates = num_candidates
@@ -19,7 +19,7 @@ class InferRules(BootstrapFewShot):
         self.num_threads = num_threads
         self.rules_induction_program = RulesInductionProgram(num_rules, teacher_settings=teacher_settings)
         self.metric = kwargs.get("metric")
-        self.max_errors = kwargs.get("max_errors", 10)
+        self.max_errors = kwargs.get("max_errors")
 
     def compile(self, student, *, teacher=None, trainset, valset=None):
         if valset is None:
@@ -109,16 +109,18 @@ class InferRules(BootstrapFewShot):
         ]
 
     def evaluate_program(self, program, dataset):
+        effective_max_errors = (
+            self.max_errors if self.max_errors is not None else dspy.settings.max_errors
+        )
         evaluate = Evaluate(
             devset=dataset,
             metric=self.metric,
             num_threads=self.num_threads,
-            max_errors=self.max_errors,
+            max_errors=effective_max_errors,
             display_table=False,
             display_progress=True,
-            return_all_scores=True,
         )
-        score, _ = evaluate(program, metric=self.metric)
+        score = evaluate(program, metric=self.metric).score
         return score
 
 
@@ -140,9 +142,12 @@ class RulesInductionProgram(dspy.Module):
         self.rng = random.Random(0)
 
     def forward(self, examples_text):
-        with dspy.settings.context(**self.teacher_settings):
-            lm = dspy.settings.lm.copy(temperature=self.rng.uniform(0.9, 1.0))
-            with dspy.settings.context(lm=lm):
+        with dspy.context(**self.teacher_settings):
+            # Generate rules with a fresh rollout and non-zero temperature.
+            lm = dspy.settings.lm.copy(
+                rollout_id=self.rng.randint(0, 10**9), temperature=1.0
+            )
+            with dspy.context(lm=lm):
                 rules = self.rules_induction(examples_text=examples_text).natural_language_rules
 
         return rules.strip()

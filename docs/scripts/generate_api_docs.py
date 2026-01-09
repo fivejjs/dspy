@@ -1,9 +1,9 @@
-from pathlib import Path
 import importlib
 import inspect
 import pkgutil
-import shutil
+from pathlib import Path
 from typing import Any
+
 import dspy
 
 API_MAPPING = {
@@ -12,11 +12,14 @@ API_MAPPING = {
         dspy.Embedder,
     ],
     "primitives": [
+        dspy.Audio,
+        dspy.Code,
         dspy.Example,
         dspy.Image,
         dspy.History,
         dspy.Prediction,
         dspy.Tool,
+        dspy.ToolCalls,
     ],
     "signatures": [
         dspy.Signature,
@@ -27,6 +30,7 @@ API_MAPPING = {
         dspy.Adapter,
         dspy.ChatAdapter,
         dspy.JSONAdapter,
+        dspy.TwoStepAdapter,
     ],
     "modules": [
         dspy.Module,
@@ -35,8 +39,9 @@ API_MAPPING = {
         dspy.ReAct,
         dspy.ProgramOfThought,
         dspy.MultiChainComparison,
-        dspy.ChainOfThoughtWithHint,
         dspy.Parallel,
+        dspy.BestOfN,
+        dspy.Refine,
     ],
     "tools": [
         dspy.ColBERTv2,
@@ -52,8 +57,10 @@ API_MAPPING = {
         dspy.disable_logging,
         dspy.enable_litellm_logging,
         dspy.disable_litellm_logging,
-        dspy.utils.streaming.StatusMessageProvider,
-        dspy.utils.streaming.StatusMessage,
+        dspy.configure_cache,
+        dspy.streaming.StatusMessageProvider,
+        dspy.streaming.StatusMessage,
+        dspy.streaming.StreamListener,
     ],
     "evaluation": [
         dspy.Evaluate,
@@ -61,6 +68,7 @@ API_MAPPING = {
         dspy.evaluate.answer_passage_match,
         dspy.evaluate.SemanticF1,
         dspy.evaluate.CompleteAndGrounded,
+        dspy.evaluate.EvaluationResult,
     ],
     "optimizers": [
         dspy.LabeledFewShot,
@@ -74,15 +82,23 @@ API_MAPPING = {
         dspy.KNN,
         dspy.KNNFewShot,
         dspy.InferRules,
+        dspy.GEPA,
+    ],
+    "experimental": [
+        dspy.experimental.Citations,
+        dspy.experimental.Document,
     ],
 }
 
+LOCATION_OVERRIDES = {
+    "docs/api/optimizers/GEPA.md": "docs/api/optimizers/GEPA/overview.md",
+}
 
 def should_document_method(obj):
     name = obj.__name__
     # Exclude methods not defined in dspy, such as `model_dump_json` from pydantic.
     module = getattr(obj, "__module__", "")
-    if not module or not module.startswith(f"dspy"):
+    if not module or not module.startswith("dspy"):
         return False
     # Exclude private and dunder methods, but include `__call__`
     if name == "__call__" or not name.startswith("_"):
@@ -102,7 +118,8 @@ def get_module_contents(module):
             contents[name] = obj
         elif (
             (inspect.isclass(obj) or (inspect.isroutine(obj) and should_document_method(obj)))
-            and obj.__module__.startswith(module.__name__)
+            # classes or functions in experimental module are not located in dspy/experimental
+            and (obj.__module__.startswith(module.__name__) or module.__name__.startswith("dspy.experimental"))
             and not name.startswith("_")
         ):
             contents[name] = obj
@@ -130,20 +147,21 @@ def generate_doc_page(name: str, module_path: str, obj: Any, is_root: bool = Fal
         members:
 {methods_list}"""
 
-    return f"""# {module_path}.{name}
-
+    # We need to put ::: at last to avoid unclosed div. See https://github.com/danielfrg/mkdocs-jupyter/issues/231 for more details.
+    return f"""<!-- START_API_REF -->
 ::: {module_path}.{name}
     handler: python
     options:{members_config}
         show_source: true
-        show_undocumented_members: true
         show_root_heading: true
-        show_inherited_members: true
         heading_level: 2
         docstring_style: google
         show_root_full_path: true
         show_object_full_path: false
         separate_signature: false
+        inherited_members: true
+:::
+<!-- END_API_REF -->
 """
 
 
@@ -152,6 +170,52 @@ def get_api_category(obj):
         if obj in objects:
             return category
     return None
+
+
+def read_existing_content(file_path: Path) -> tuple[str, str]:
+    """Read existing file content and split into pre and post API reference sections.
+
+    Returns:
+        tuple[str, str]: (content_before_api_ref, content_after_api_ref)
+        If file doesn't exist or no API ref section found, returns empty strings.
+    """
+    if not file_path.exists():
+        return "", ""
+
+    content = file_path.read_text()
+
+    # Look for our specific API reference markers
+    api_start_marker = "<!-- START_API_REF -->"
+    api_end_marker = "<!-- END_API_REF -->"
+
+    api_start = content.find(api_start_marker)
+    if api_start == -1:
+        # No API section found, treat all content as pre-content
+        return content, ""
+
+    api_end = content.find(api_end_marker)
+    if api_end == -1:
+        # Start marker found but no end marker - treat rest of file as post-content
+        api_end = len(content)
+    else:
+        api_end = api_end + len(api_end_marker)
+
+    return content[:api_start].rstrip(), content[api_end:].lstrip()
+
+
+def write_doc_file(file_path: Path, title: str, api_content: str):
+    """Write documentation to file while preserving existing content."""
+    pre_content, post_content = read_existing_content(file_path)
+
+    # If no pre-content exists, add the title
+    if not pre_content:
+        pre_content = f"# {title}\n"
+
+    # Combine all sections
+    full_content = f"{pre_content}\n\n{api_content}\n{post_content}".strip() + "\n"
+
+    # Write the combined content
+    file_path.write_text(full_content)
 
 
 def generate_md_docs(output_dir: Path, excluded_modules=None):
@@ -178,8 +242,10 @@ def generate_md_docs(output_dir: Path, excluded_modules=None):
             continue
 
         page_content = generate_doc_page(name, "dspy", obj, is_root=True)
-        with open(output_dir / category / f"{name}.md", "w") as f:
-            f.write(page_content)
+        file_path = output_dir / category / f"{name}.md"
+        if file_path.as_posix() in LOCATION_OVERRIDES:
+            file_path = Path(LOCATION_OVERRIDES[file_path.as_posix()])
+        write_doc_file(file_path, f"dspy.{name}", page_content)
 
         objects_processed[f"{obj.__module__}.{name}"] = obj
 
@@ -229,8 +295,10 @@ def generate_md_docs_submodule(module_path: str, output_dir: Path, objects_proce
         if full_name not in objects_processed:
             # Only generate docs for objects that are not root-level objects.
             page_content = generate_doc_page(name, module_path, obj, is_root=False)
-            with open(output_dir / category / f"{name}.md", "w") as f:
-                f.write(page_content)
+            file_path = output_dir / category / f"{name}.md"
+            if file_path.as_posix() in LOCATION_OVERRIDES:
+                file_path = Path(LOCATION_OVERRIDES[file_path.as_posix()])
+            write_doc_file(file_path, f"{module_path}.{name}", page_content)
 
             objects_processed[full_name] = obj
 
@@ -251,19 +319,15 @@ def remove_empty_dirs(path: Path):
 
 if __name__ == "__main__":
     api_dir = Path("docs/api")
-    if api_dir.exists():
-        # Delete only subdirectories
-        for item in api_dir.iterdir():
-            if item.is_dir():
-                shutil.rmtree(item)
+    api_dir.mkdir(parents=True, exist_ok=True)
 
-    for keys in API_MAPPING.keys():
-        # Create a directory for each API category
-        subpath = api_dir / keys
+    # Create category directories if they don't exist
+    for category in API_MAPPING.keys():
+        subpath = api_dir / category
         subpath.mkdir(parents=True, exist_ok=True)
 
     excluded_modules = ["dspy.dsp"]
-
     generate_md_docs(api_dir, excluded_modules=excluded_modules)
+
     # Clean up empty directories
     remove_empty_dirs(api_dir)

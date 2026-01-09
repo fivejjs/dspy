@@ -23,12 +23,21 @@ dspy.configure(lm=lm)
         dspy.configure(lm=lm)
         ```
 
+    === "Gemini (AI Studio)"
+        You can authenticate by setting the GEMINI_API_KEY env variable or passing `api_key` below.
+
+        ```python linenums="1"
+        import dspy
+        lm = dspy.LM('gemini/gemini-2.5-pro-preview-03-25', api_key='GEMINI_API_KEY')
+        dspy.configure(lm=lm)
+        ```
+
     === "Anthropic"
         You can authenticate by setting the ANTHROPIC_API_KEY env variable or passing `api_key` below.
 
         ```python linenums="1"
         import dspy
-        lm = dspy.LM('anthropic/claude-3-opus-20240229', api_key='YOUR_ANTHROPIC_API_KEY')
+        lm = dspy.LM('anthropic/claude-sonnet-4-5-20250929', api_key='YOUR_ANTHROPIC_API_KEY')
         dspy.configure(lm=lm)
         ```
 
@@ -77,14 +86,16 @@ dspy.configure(lm=lm)
         ```
 
     === "Other providers"
-        In DSPy, you can use any of the dozens of [LLM providers supported by LiteLLM](https://docs.litellm.ai/docs/providers). Simply follow their instructions for which `{PROVIDER}_API_KEY` to set and how to write pass the `{provider_name}/{model_name}` to the constructor.
+        In DSPy, you can use any of the dozens of [LLM providers supported by LiteLLM](https://docs.litellm.ai/docs/providers). Simply follow their instructions for which `{PROVIDER}_API_KEY` to set and how to write pass the `{provider_name}/{model_name}` to the constructor. 
 
         Some examples:
 
         - `anyscale/mistralai/Mistral-7B-Instruct-v0.1`, with `ANYSCALE_API_KEY`
         - `together_ai/togethercomputer/llama-2-70b-chat`, with `TOGETHERAI_API_KEY`
         - `sagemaker/<your-endpoint-name>`, with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION_NAME`
-        - `azure/<your_deployment_name>`, with `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION`, and the optional `AZURE_AD_TOKEN` and `AZURE_API_TYPE`
+        - `azure/<your_deployment_name>`, with `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION`, and the optional `AZURE_AD_TOKEN` and `AZURE_API_TYPE` as environment variables. If you are initiating external models without setting environment variables, use the following:
+        `lm = dspy.LM('azure/<your_deployment_name>', api_key = 'AZURE_API_KEY' , api_base = 'AZURE_API_BASE', api_version = 'AZURE_API_VERSION')`
+
 
         
         If your provider offers an OpenAI-compatible endpoint, just add an `openai/` prefix to your full model name.
@@ -94,6 +105,7 @@ dspy.configure(lm=lm)
         lm = dspy.LM('openai/your-model-name', api_key='PROVIDER_API_KEY', api_base='YOUR_PROVIDER_URL')
         dspy.configure(lm=lm)
         ```
+If you run into errors, please refer to the [LiteLLM Docs](https://docs.litellm.ai/docs/providers) to verify if you are using the same variable names/following the right procedure.
 
 ## Calling the LM directly.
 
@@ -140,7 +152,7 @@ with dspy.context(lm=dspy.LM('openai/gpt-3.5-turbo')):
 ```
 **Possible Output:**
 ```text
-GPT-4o: The number of floors in the castle David Gregory inherited cannot be determined with the information provided.
+GPT-4o-mini: The number of floors in the castle David Gregory inherited cannot be determined with the information provided.
 GPT-3.5-turbo: The castle David Gregory inherited has 7 floors.
 ```
 
@@ -153,6 +165,36 @@ gpt_4o_mini = dspy.LM('openai/gpt-4o-mini', temperature=0.9, max_tokens=3000, st
 ```
 
 By default LMs in DSPy are cached. If you repeat the same call, you will get the same outputs. But you can turn off caching by setting `cache=False`.
+
+If you want to keep caching enabled but force a new request (for example, to obtain diverse outputs),
+pass a unique `rollout_id` and set a non-zero `temperature` in your call. DSPy hashes both the inputs
+and the `rollout_id` when looking up a cache entry, so different values force a new LM request while
+still caching future calls with the same inputs and `rollout_id`. The ID is also recorded in
+`lm.history`, which makes it easy to track or compare different rollouts during experiments. Changing
+only the `rollout_id` while keeping `temperature=0` will not affect the LM's output.
+
+```python linenums="1"
+lm("Say this is a test!", rollout_id=1, temperature=1.0)
+```
+
+You can pass these LM kwargs directly to DSPy modules as well. Supplying them at
+initialization sets the defaults for every call:
+
+```python linenums="1"
+predict = dspy.Predict("question -> answer", rollout_id=1, temperature=1.0)
+```
+
+To override them for a single invocation, provide a ``config`` dictionary when
+calling the module:
+
+```python linenums="1"
+predict = dspy.Predict("question -> answer")
+predict(question="What is 1 + 52?", config={"rollout_id": 5, "temperature": 1.0})
+```
+
+In both cases, ``rollout_id`` is forwarded to the underlying LM, affects
+its caching behavior, and is stored alongside each response so you can
+replay or analyze specific rollouts later.
 
 
 ## Inspecting output and usage metadata.
@@ -167,10 +209,40 @@ lm.history[-1].keys()  # access the last call to the LM, with all metadata
 
 **Output:**
 ```text
-dict_keys(['prompt', 'messages', 'kwargs', 'response', 'outputs', 'usage', 'cost'])
+dict_keys(['prompt', 'messages', 'kwargs', 'response', 'outputs', 'usage', 'cost', 'timestamp', 'uuid', 'model', 'response_model', 'model_type])
 ```
 
-### Advanced: Building custom LMs and writing your own Adapters.
+## Using the Responses API
+
+By default, DSPy calls language models (LMs) using LiteLLM's [Chat Completions API](https://docs.litellm.ai/docs/completion), which is suitable for most standard models and tasks. However, some advanced models, such as OpenAI's reasoning models (e.g., `gpt-5` or other future models), may offer improved quality or additional features when accessed via the [Responses API](https://docs.litellm.ai/docs/response_api), which is supported in DSPy.
+
+**When should you use the Responses API?**
+
+- If you are working with models that support or require the `responses` endpoint (such as OpenAI's reasoning models).
+- When you want to leverage enhanced reasoning, multi-turn, or richer output capabilities provided by certain models.
+
+**How to enable the Responses API in DSPy:**
+
+To enable the Responses API, just set `model_type="responses"` when creating the `dspy.LM` instance.
+
+```python
+import dspy
+
+# Configure DSPy to use the Responses API for your language model
+dspy.configure(
+    lm=dspy.LM(
+        "openai/gpt-5-mini",
+        model_type="responses",
+        temperature=1.0,
+        max_tokens=16000,
+    ),
+)
+```
+
+Please note that not all models or providers support the Responses API, check [LiteLLM's documentation](https://docs.litellm.ai/docs/response_api) for more details.
+
+
+## Advanced: Building custom LMs and writing your own Adapters.
 
 Though rarely needed, you can write custom LMs by inheriting from `dspy.BaseLM`. Another advanced layer in the DSPy ecosystem is that of _adapters_, which sit between DSPy signatures and LMs. A future version of this guide will discuss these advanced features, though you likely don't need them.
 

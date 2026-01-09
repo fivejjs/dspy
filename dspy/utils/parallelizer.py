@@ -1,13 +1,14 @@
-import sys
-import tqdm
-import signal
-import logging
-import threading
-import traceback
-import time
 import contextlib
+import copy
+import logging
+import signal
+import sys
+import threading
+import time
+import traceback
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,10 @@ logger = logging.getLogger(__name__)
 class ParallelExecutor:
     def __init__(
         self,
-        num_threads,
-        max_errors=5,
+        num_threads=None,
+        max_errors=None,
         disable_progress_bar=False,
-        provide_traceback=False,
+        provide_traceback=None,
         compare_results=False,
         timeout=120,
         straggler_limit=3,
@@ -27,11 +28,12 @@ class ParallelExecutor:
         Offers isolation between the tasks (dspy.settings) irrespective of whether num_threads == 1 or > 1.
         Handles also straggler timeouts.
         """
-        
-        self.num_threads = num_threads
-        self.max_errors = max_errors
+        from dspy.dsp.utils.settings import settings
+
+        self.num_threads = num_threads or settings.num_threads
+        self.max_errors = settings.max_errors if max_errors is None else max_errors
         self.disable_progress_bar = disable_progress_bar
-        self.provide_traceback = provide_traceback
+        self.provide_traceback = provide_traceback if provide_traceback is not None else settings.provide_traceback
         self.compare_results = compare_results
         self.timeout = timeout
         self.straggler_limit = straggler_limit
@@ -39,8 +41,11 @@ class ParallelExecutor:
         self.error_count = 0
         self.error_lock = threading.Lock()
         self.cancel_jobs = threading.Event()
+        self.failed_indices = []
+        self.exceptions_map = {}
 
     def execute(self, function, data):
+        tqdm.tqdm._instances.clear()
         wrapped = self._wrap_function(function)
         return self._execute_parallel(wrapped, data)
 
@@ -58,11 +63,8 @@ class ParallelExecutor:
                 if self.provide_traceback:
                     logger.error(f"Error for {item}: {e}\n{traceback.format_exc()}")
                 else:
-                    logger.error(
-                        f"Error for {item}: {e}. "
-                        "Set `provide_traceback=True` for traceback."
-                    )
-                return None
+                    logger.error(f"Error for {item}: {e}. Set `provide_traceback=True` for traceback.")
+                return e
 
         return safe_func
 
@@ -86,13 +88,17 @@ class ParallelExecutor:
             # Apply parent's thread-local overrides
             from dspy.dsp.utils.settings import thread_local_overrides
 
-            original = thread_local_overrides.overrides
-            thread_local_overrides.overrides = parent_overrides.copy()
+            original = thread_local_overrides.get()
+            new_overrides = {**original, **parent_overrides.copy()}
+            if new_overrides.get("usage_tracker"):
+                # Usage tracker needs to be deep copied across threads so that each thread tracks its own usage
+                new_overrides["usage_tracker"] = copy.deepcopy(new_overrides["usage_tracker"])
+            token = thread_local_overrides.set(new_overrides)
 
             try:
                 return index, function(item)
             finally:
-                thread_local_overrides.overrides = original
+                thread_local_overrides.reset(token)
 
         # Handle Ctrl-C in the main thread
         @contextlib.contextmanager
@@ -118,16 +124,14 @@ class ParallelExecutor:
             with interrupt_manager():
                 from dspy.dsp.utils.settings import thread_local_overrides
 
-                parent_overrides = thread_local_overrides.overrides.copy()
+                parent_overrides = thread_local_overrides.get().copy()
 
                 futures_map = {}
                 futures_set = set()
                 submission_counter = 0
 
                 for idx, item in enumerate(data):
-                    f = executor.submit(
-                        worker, parent_overrides, submission_counter, idx, item
-                    )
+                    f = executor.submit(worker, parent_overrides, submission_counter, idx, item)
                     futures_map[f] = (submission_counter, idx, item)
                     futures_set.add(f)
                     submission_counter += 1
@@ -145,9 +149,7 @@ class ParallelExecutor:
                 while futures_set and not self.cancel_jobs.is_set():
                     if all_done():
                         break
-                    done, not_done = wait(
-                        futures_set, timeout=1, return_when=FIRST_COMPLETED
-                    )
+                    done, not_done = wait(futures_set, timeout=1, return_when=FIRST_COMPLETED)
                     for f in done:
                         futures_set.remove(f)
                         try:
@@ -156,7 +158,14 @@ class ParallelExecutor:
                             pass
                         else:
                             if outcome != job_cancelled and results[index] is None:
-                                results[index] = outcome
+                                # Check if this is an exception
+                                if isinstance(outcome, Exception):
+                                    with self.error_lock:
+                                        self.failed_indices.append(index)
+                                        self.exceptions_map[index] = outcome
+                                    results[index] = None  # Keep None for failed examples
+                                else:
+                                    results[index] = outcome
 
                             # Update progress
                             if self.compare_results:

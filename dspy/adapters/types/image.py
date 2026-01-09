@@ -1,13 +1,16 @@
 import base64
 import io
-import os
-from typing import Any, Dict, List, Union
-from urllib.parse import urlparse
-import re
 import mimetypes
+import os
+import warnings
+from functools import lru_cache
+from typing import Any, Union
+from urllib.parse import urlparse
 
 import pydantic
 import requests
+
+from dspy.adapters.types.base_type import Type
 
 try:
     from PIL import Image as PILImage
@@ -17,47 +20,86 @@ except ImportError:
     PIL_AVAILABLE = False
 
 
-class Image(pydantic.BaseModel):
+class Image(Type):
     url: str
-    
-    model_config = {
-        'frozen': True,
-        'str_strip_whitespace': True,
-        'validate_assignment': True,
-        'extra': 'forbid',
-    }
-        
-    @pydantic.model_validator(mode="before")
-    @classmethod
-    def validate_input(cls, values):
-        # Allow the model to accept either a URL string or a dictionary with a single 'url' key
-        if isinstance(values, str):
-            # if a string, assume it's the URL directly and wrap it in a dict
-            return {"url": values}
-        elif isinstance(values, dict) and set(values.keys()) == {"url"}:
-            # if it's a dict, ensure it has only the 'url' key
-            return values
-        elif isinstance(values, cls):
-            return values.model_dump()
-        else:
-            raise TypeError("Expected a string URL or a dictionary with a key 'url'.")
 
-    # If all my inits just call encode_image, should that be in this class
+    model_config = pydantic.ConfigDict(
+        frozen=True,
+        str_strip_whitespace=True,
+        validate_assignment=True,
+        extra="forbid",
+    )
+
+    def __init__(self, url: Any = None, *, download: bool = False, **data):
+        """Create an Image.
+
+        Parameters
+        ----------
+        url:
+            The image source. Supported values include
+
+            - ``str``: HTTP(S)/GS URL or local file path
+            - ``bytes``: raw image bytes
+            - ``PIL.Image.Image``: a PIL image instance
+            - ``dict`` with a single ``{"url": value}`` entry (legacy form)
+            - already encoded data URI
+
+        download:
+            Whether remote URLs should be downloaded to infer their MIME type.
+
+        Any additional keyword arguments are passed to :class:`pydantic.BaseModel`.
+        """
+
+        if url is not None and "url" not in data:
+            # Support a positional argument while allowing ``url=`` in **data.
+            if isinstance(url, dict) and set(url.keys()) == {"url"}:
+                # Legacy dict form from previous model validator.
+                data["url"] = url["url"]
+            else:
+                # ``url`` may be a string, bytes, or a PIL image.
+                data["url"] = url
+
+        if "url" in data:
+            # Normalize any accepted input into a base64 data URI or plain URL.
+            data["url"] = encode_image(data["url"], download_images=download)
+
+        # Delegate the rest of initialization to pydantic's BaseModel.
+        super().__init__(**data)
+
+    @lru_cache(maxsize=32)
+    def format(self) -> list[dict[str, Any]] | str:
+        try:
+            image_url = encode_image(self.url)
+        except Exception as e:
+            raise ValueError(f"Failed to format image for DSPy: {e}")
+        return [{"type": "image_url", "image_url": {"url": image_url}}]
+
     @classmethod
     def from_url(cls, url: str, download: bool = False):
-        return cls(url=encode_image(url, download))
+        warnings.warn(
+            "Image.from_url is deprecated; use Image(url) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls(url, download=download)
 
     @classmethod
     def from_file(cls, file_path: str):
-        return cls(url=encode_image(file_path))
+        warnings.warn(
+            "Image.from_file is deprecated; use Image(file_path) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls(file_path)
 
     @classmethod
-    def from_PIL(cls, pil_image):
-        return cls(url=encode_image(pil_image))
-
-    @pydantic.model_serializer()
-    def serialize_model(self):
-        return "<DSPY_IMAGE_START>" + self.url + "<DSPY_IMAGE_END>"
+    def from_PIL(cls, pil_image):  # noqa: N802
+        warnings.warn(
+            "Image.from_PIL is deprecated; use Image(pil_image) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls(pil_image)
 
     def __str__(self):
         return self.serialize_model()
@@ -66,14 +108,15 @@ class Image(pydantic.BaseModel):
         if "base64" in self.url:
             len_base64 = len(self.url.split("base64,")[1])
             image_type = self.url.split(";")[0].split("/")[-1]
-            return f"Image(url=data:image/{image_type};base64,<IMAGE_BASE_64_ENCODED({str(len_base64)})>)"
+            return f"Image(url=data:image/{image_type};base64,<IMAGE_BASE_64_ENCODED({len_base64!s})>)"
         return f"Image(url='{self.url}')"
+
 
 def is_url(string: str) -> bool:
     """Check if a string is a valid URL."""
     try:
         result = urlparse(string)
-        return all([result.scheme in ("http", "https"), result.netloc])
+        return all([result.scheme in ("http", "https", "gs"), result.netloc])
     except ValueError:
         return False
 
@@ -111,8 +154,7 @@ def encode_image(image: Union[str, bytes, "PILImage.Image", dict], download_imag
                 return image
         else:
             # Unsupported string format
-            print(f"Unsupported file string: {image}")
-            raise ValueError(f"Unsupported file string: {image}")
+            raise ValueError(f"Unrecognized file string: {image}; If this file type should be supported, please open an issue.")
     elif PIL_AVAILABLE and isinstance(image, PILImage.Image):
         # PIL Image
         return _encode_pil_image(image)
@@ -162,7 +204,7 @@ def _encode_image_from_url(image_url: str) -> str:
     return f"data:{mime_type};base64,{encoded_data}"
 
 
-def _encode_pil_image(image: 'PILImage') -> str:
+def _encode_pil_image(image: "PILImage") -> str:
     """Encode a PIL Image object to a base64 data URI."""
     buffered = io.BytesIO()
     file_format = image.format or "PNG"
@@ -196,52 +238,3 @@ def is_image(obj) -> bool:
         elif is_url(obj):
             return True
     return False
-
-def try_expand_image_tags(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Try to expand image tags in the messages."""
-    for message in messages:
-        # NOTE: Assumption that content is a string
-        if "content" in message and "<DSPY_IMAGE_START>" in message["content"]:
-            message["content"] = expand_image_tags(message["content"])
-    return messages
-
-def expand_image_tags(text: str) -> Union[str, List[Dict[str, Any]]]:
-    """Expand image tags in the text. If there are any image tags, 
-    turn it from a content string into a content list of texts and image urls.
-    
-    Args:
-        text: The text content that may contain image tags
-        
-    Returns:
-        Either the original string if no image tags, or a list of content dicts
-        with text and image_url entries
-    """
-    image_tag_regex = r'"?<DSPY_IMAGE_START>(.*?)<DSPY_IMAGE_END>"?'
-    
-    # If no image tags, return original text
-    if not re.search(image_tag_regex, text):
-        return text
-        
-    final_list = []
-    remaining_text = text
-    
-    while remaining_text:
-        match = re.search(image_tag_regex, remaining_text)
-        if not match:
-            if remaining_text.strip():
-                final_list.append({"type": "text", "text": remaining_text.strip()})
-            break
-            
-        # Get text before the image tag
-        prefix = remaining_text[:match.start()].strip()
-        if prefix:
-            final_list.append({"type": "text", "text": prefix})
-            
-        # Add the image
-        image_url = match.group(1)
-        final_list.append({"type": "image_url", "image_url": {"url": image_url}})
-        
-        # Update remaining text
-        remaining_text = remaining_text[match.end():].strip()
-    
-    return final_list

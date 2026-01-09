@@ -1,15 +1,21 @@
+import asyncio
 import copy
 import enum
+import time
+import types
 from datetime import datetime
+from unittest.mock import patch
 
+import orjson
 import pydantic
 import pytest
-import ujson
+from litellm import ModelResponse
+from pydantic import BaseModel, HttpUrl
 
 import dspy
 from dspy import Predict, Signature
+from dspy.predict.predict import serialize_object
 from dspy.utils.dummies import DummyLM
-from unittest.mock import patch, MagicMock, Mock
 
 
 def test_initialization_with_string_signature():
@@ -36,7 +42,7 @@ def test_reset_method():
 def test_lm_after_dump_and_load_state():
     predict_instance = Predict("input -> output")
     lm = dspy.LM(
-        model="openai/gpt-4o-mini", 
+        model="openai/gpt-4o-mini",
         model_type="chat",
         temperature=1,
         max_tokens=100,
@@ -50,7 +56,6 @@ def test_lm_after_dump_and_load_state():
         "max_tokens": 100,
         "num_retries": 10,
         "cache": True,
-        "cache_in_memory": True,
         "finetuning_model": None,
         "launch_kwargs": {},
         "train_kwargs": {},
@@ -65,7 +70,7 @@ def test_lm_after_dump_and_load_state():
 def test_call_method():
     predict_instance = Predict("input -> output")
     lm = DummyLM([{"output": "test output"}])
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
     result = predict_instance(input="test input")
     assert result.output == "test output"
 
@@ -99,8 +104,8 @@ def test_demos_after_dump_and_load_state():
     assert len(dumped_state["demos"]) == len(original_instance.demos)
     assert dumped_state["demos"][0]["content"] == original_instance.demos[0].content
 
-    saved_state = ujson.dumps(dumped_state)
-    loaded_state = ujson.loads(saved_state)
+    saved_state = orjson.dumps(dumped_state).decode()
+    loaded_state = orjson.loads(saved_state)
 
     new_instance = Predict(TranslateToEnglish)
     new_instance.load_state(loaded_state)
@@ -141,8 +146,8 @@ def test_typed_demos_after_dump_and_load_state():
     assert dumped_state["demos"][0]["items"][0] == {"name": "apple", "quantity": 5}
 
     # Test serialization/deserialization
-    saved_state = ujson.dumps(dumped_state)
-    loaded_state = ujson.loads(saved_state)
+    saved_state = orjson.dumps(dumped_state).decode()
+    loaded_state = orjson.loads(saved_state)
 
     # Test load_state
     new_instance = Predict(InventorySignature)
@@ -196,8 +201,8 @@ def test_typed_demos_after_dump_and_load_state():
 #     assert len(dumped_state["demos"]) == len(original_instance.demos)
 #     assert dumped_state["demos"][0]["input"] == original_instance.demos[0].input.model_dump_json()
 
-#     saved_state = ujson.dumps(dumped_state)
-#     loaded_state = ujson.loads(saved_state)
+#     saved_state = orjson.dumps(dumped_state).decode()
+#     loaded_state = orjson.loads(saved_state)
 
 #     new_instance = TypedPredictor(TypedTranslateToEnglish).predictor
 #     new_instance.load_state(loaded_state)
@@ -229,11 +234,12 @@ def test_signature_fields_after_dump_and_load_state(tmp_path):
     new_instance.load(file_path)
     assert new_instance.signature.dump_state() == original_instance.signature.dump_state()
 
+
 @pytest.mark.parametrize("filename", ["model.json", "model.pkl"])
 def test_lm_field_after_dump_and_load_state(tmp_path, filename):
     file_path = tmp_path / filename
     lm = dspy.LM(
-        model="openai/gpt-4o-mini", 
+        model="openai/gpt-4o-mini",
         model_type="chat",
         temperature=1,
         max_tokens=100,
@@ -247,21 +253,21 @@ def test_lm_field_after_dump_and_load_state(tmp_path, filename):
     assert file_path.exists()
 
     loaded_predict = dspy.Predict("q->a")
-    loaded_predict.load(file_path)
+    loaded_predict.load(file_path, allow_pickle=True)
 
     assert original_predict.dump_state() == loaded_predict.dump_state()
 
 
 def test_forward_method():
     program = Predict("question -> answer")
-    dspy.settings.configure(lm=DummyLM([{"answer": "No more responses"}]))
+    dspy.configure(lm=DummyLM([{"answer": "No more responses"}]))
     result = program(question="What is 1+1?").answer
     assert result == "No more responses"
 
 
 def test_forward_method2():
     program = Predict("question -> answer1, answer2")
-    dspy.settings.configure(lm=DummyLM([{"answer1": "my first answer", "answer2": "my second answer"}]))
+    dspy.configure(lm=DummyLM([{"answer1": "my first answer", "answer2": "my second answer"}]))
     result = program(question="What is 1+1?")
     assert result.answer1 == "my first answer"
     assert result.answer2 == "my second answer"
@@ -276,7 +282,7 @@ def test_config_management():
 
 def test_multi_output():
     program = Predict("question -> answer", n=2)
-    dspy.settings.configure(lm=DummyLM([{"answer": "my first answer"}, {"answer": "my second answer"}]))
+    dspy.configure(lm=DummyLM([{"answer": "my first answer"}, {"answer": "my second answer"}]))
     results = program(question="What is 1+1?")
     assert results.completions.answer[0] == "my first answer"
     assert results.completions.answer[1] == "my second answer"
@@ -284,7 +290,7 @@ def test_multi_output():
 
 def test_multi_output2():
     program = Predict("question -> answer1, answer2", n=2)
-    dspy.settings.configure(
+    dspy.configure(
         lm=DummyLM(
             [
                 {"answer1": "my 0 answer", "answer2": "my 2 answer"},
@@ -321,7 +327,7 @@ def test_datetime_inputs_and_outputs():
             }
         ]
     )
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
 
     output = program(
         events=[
@@ -353,7 +359,7 @@ def test_explicitly_valued_enum_inputs_and_outputs():
             }
         ]
     )
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
 
     output = program(current_status=Status.PENDING)
     assert output.next_status == Status.IN_PROGRESS
@@ -380,14 +386,14 @@ def test_enum_inputs_and_outputs_with_shared_names_and_values():
             }
         ]
     )
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
 
     output = program(current_status=TicketStatus.OPEN)
     assert output.next_status == TicketStatus.CLOSED  # By value
 
 
 def test_auto_valued_enum_inputs_and_outputs():
-    Status = enum.Enum("Status", ["PENDING", "IN_PROGRESS", "COMPLETED"])
+    Status = enum.Enum("Status", ["PENDING", "IN_PROGRESS", "COMPLETED"])  # noqa: N806
 
     class StatusSignature(dspy.Signature):
         current_status: Status = dspy.InputField()
@@ -403,7 +409,7 @@ def test_auto_valued_enum_inputs_and_outputs():
             }
         ]
     )
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
 
     output = program(current_status=Status.PENDING)
     assert output.next_status == Status.IN_PROGRESS
@@ -430,7 +436,7 @@ def test_output_only():
     predictor = Predict(OutputOnlySignature)
 
     lm = DummyLM([{"output": "short answer"}])
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
     assert predictor().output == "short answer"
 
 
@@ -468,10 +474,10 @@ def test_call_predict_with_chat_history(adapter_type):
 
     if adapter_type == "chat":
         lm = SpyLM("dummy_model")
-        dspy.settings.configure(adapter=dspy.ChatAdapter(), lm=lm)
+        dspy.configure(adapter=dspy.ChatAdapter(), lm=lm)
     else:
         lm = SpyLM("dummy_model", return_json=True)
-        dspy.settings.configure(adapter=dspy.JSONAdapter(), lm=lm)
+        dspy.configure(adapter=dspy.JSONAdapter(), lm=lm)
 
     program(
         question="are you sure that's correct?",
@@ -487,3 +493,296 @@ def test_call_predict_with_chat_history(adapter_type):
     assert "what's the capital of france?" in messages[1]["content"]
     assert "paris" in messages[2]["content"]
     assert "are you sure that's correct" in messages[3]["content"]
+
+
+def test_lm_usage():
+    program = Predict("question -> answer")
+    dspy.configure(lm=dspy.LM("openai/gpt-4o-mini", cache=False), track_usage=True)
+    with patch(
+        "dspy.clients.lm.litellm_completion",
+        return_value=ModelResponse(
+            choices=[{"message": {"content": "[[ ## answer ## ]]\nParis"}}],
+            usage={"total_tokens": 10},
+        ),
+    ):
+        result = program(question="What is the capital of France?")
+        assert result.answer == "Paris"
+        assert result.get_lm_usage()["openai/gpt-4o-mini"]["total_tokens"] == 10
+
+
+def test_lm_usage_with_parallel():
+    program = Predict("question -> answer")
+
+    def program_wrapper(question):
+        # Sleep to make it possible to cause a race condition
+        time.sleep(0.5)
+        return program(question=question)
+
+    dspy.configure(lm=dspy.LM("openai/gpt-4o-mini", cache=False), track_usage=True)
+    with patch(
+        "dspy.clients.lm.litellm_completion",
+        return_value=ModelResponse(
+            choices=[{"message": {"content": "[[ ## answer ## ]]\nParis"}}],
+            usage={"total_tokens": 10},
+        ),
+    ):
+        parallelizer = dspy.Parallel()
+        input_pairs = [
+            (program_wrapper, {"question": "What is the capital of France?"}),
+            (program_wrapper, {"question": "What is the capital of France?"}),
+        ]
+        results = parallelizer(input_pairs)
+        assert results[0].answer == "Paris"
+        assert results[1].answer == "Paris"
+        assert results[0].get_lm_usage()["openai/gpt-4o-mini"]["total_tokens"] == 10
+        assert results[1].get_lm_usage()["openai/gpt-4o-mini"]["total_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_lm_usage_with_async():
+    program = Predict("question -> answer")
+
+    original_aforward = program.aforward
+
+    async def patched_aforward(self, **kwargs):
+        await asyncio.sleep(1)
+        return await original_aforward(**kwargs)
+
+    program.aforward = types.MethodType(patched_aforward, program)
+
+    with dspy.context(lm=dspy.LM("openai/gpt-4o-mini", cache=False), track_usage=True):
+        with patch(
+            "litellm.acompletion",
+            return_value=ModelResponse(
+                choices=[{"message": {"content": "[[ ## answer ## ]]\nParis"}}],
+                usage={"total_tokens": 10},
+            ),
+        ):
+            coroutines = [
+                program.acall(question="What is the capital of France?"),
+                program.acall(question="What is the capital of France?"),
+                program.acall(question="What is the capital of France?"),
+                program.acall(question="What is the capital of France?"),
+            ]
+            results = await asyncio.gather(*coroutines)
+            assert results[0].answer == "Paris"
+            assert results[1].answer == "Paris"
+            assert results[0].get_lm_usage()["openai/gpt-4o-mini"]["total_tokens"] == 10
+            assert results[1].get_lm_usage()["openai/gpt-4o-mini"]["total_tokens"] == 10
+            assert results[2].get_lm_usage()["openai/gpt-4o-mini"]["total_tokens"] == 10
+            assert results[3].get_lm_usage()["openai/gpt-4o-mini"]["total_tokens"] == 10
+
+
+def test_positional_arguments():
+    program = Predict("question -> answer")
+    with pytest.raises(ValueError) as e:
+        program("What is the capital of France?")
+    assert str(e.value) == (
+        "Positional arguments are not allowed when calling `dspy.Predict`, must use keyword arguments that match "
+        "your signature input fields: 'question'. For example: `predict(question=input_value, ...)`."
+    )
+
+
+def test_error_message_on_invalid_lm_setup():
+    # No LM is loaded.
+    with pytest.raises(ValueError, match="No LM is loaded"):
+        Predict("question -> answer")(question="Why did a chicken cross the kitchen?")
+
+    # LM is a string.
+    dspy.configure(lm="openai/gpt-4o-mini")
+    with pytest.raises(ValueError) as e:
+        Predict("question -> answer")(question="Why did a chicken cross the kitchen?")
+
+    assert "LM must be an instance of `dspy.BaseLM`, not a string." in str(e.value)
+
+    def dummy_lm():
+        pass
+
+    # LM is not an instance of dspy.BaseLM.
+    dspy.configure(lm=dummy_lm)
+    with pytest.raises(ValueError) as e:
+        Predict("question -> answer")(question="Why did a chicken cross the kitchen?")
+    assert "LM must be an instance of `dspy.BaseLM`, not <class 'function'>." in str(e.value)
+
+
+@pytest.mark.parametrize("adapter_type", ["chat", "json"])
+def test_field_constraints(adapter_type):
+    class SpyLM(dspy.LM):
+        def __init__(self, *args, return_json=False, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = []
+            self.return_json = return_json
+
+        def __call__(self, prompt=None, messages=None, **kwargs):
+            self.calls.append({"prompt": prompt, "messages": messages, "kwargs": kwargs})
+            if self.return_json:
+                return ["{'score':'0.5', 'count':'2'}"]
+            return ["[[ ## score ## ]]\n0.5\n[[ ## count ## ]]\n2"]
+
+    class ConstrainedSignature(dspy.Signature):
+        """Test signature with constrained fields."""
+
+        # Input with length and value constraints
+        text: str = dspy.InputField(min_length=5, max_length=100, desc="Input text")
+        number: int = dspy.InputField(gt=0, lt=10, desc="A number between 0 and 10")
+
+        # Output with multiple constraints
+        score: float = dspy.OutputField(ge=0.0, le=1.0, desc="Score between 0 and 1")
+        count: int = dspy.OutputField(multiple_of=2, desc="Even number count")
+
+    program = Predict(ConstrainedSignature)
+    lm = SpyLM("dummy_model")
+    if adapter_type == "chat":
+        lm = SpyLM("dummy_model")
+        dspy.configure(adapter=dspy.ChatAdapter(), lm=lm)
+    else:
+        lm = SpyLM("dummy_model", return_json=True)
+        dspy.configure(adapter=dspy.JSONAdapter(), lm=lm)
+
+    # Call the predictor to trigger instruction generation
+    program(text="hello world", number=5)
+
+    # Get the system message containing the instructions
+    system_message = lm.calls[0]["messages"][0]["content"]
+
+    # Verify constraints are included in the field descriptions
+    assert "minimum length: 5" in system_message
+    assert "maximum length: 100" in system_message
+    assert "greater than: 0" in system_message
+    assert "less than: 10" in system_message
+    assert "greater than or equal to: 0.0" in system_message
+    assert "less than or equal to: 1.0" in system_message
+    assert "a multiple of the given number: 2" in system_message
+
+
+@pytest.mark.asyncio
+async def test_async_predict():
+    program = Predict("question -> answer")
+    with dspy.context(lm=DummyLM([{"answer": "Paris"}])):
+        result = await program.acall(question="What is the capital of France?")
+        assert result.answer == "Paris"
+
+
+def test_predicted_outputs_piped_from_predict_to_lm_call():
+    program = Predict("question -> answer")
+    dspy.configure(lm=dspy.LM("openai/gpt-4o-mini"))
+
+    with patch("litellm.completion") as mock_completion:
+        program(
+            question="Why did a chicken cross the kitchen?",
+            prediction={"type": "content", "content": "A chicken crossing the kitchen"},
+        )
+
+        assert mock_completion.call_args[1]["prediction"] == {
+            "type": "content",
+            "content": "A chicken crossing the kitchen",
+        }
+
+    # If the signature has prediction as an input field, and the prediction is not set as the standard predicted output
+    # format, it should not be passed to the LM.
+    program = Predict("question, prediction -> judgement")
+    with patch("litellm.completion") as mock_completion:
+        program(question="Why did a chicken cross the kitchen?", prediction="To get to the other side!")
+
+    assert "prediction" not in mock_completion.call_args[1]
+
+
+def test_dump_state_pydantic_non_primitive_types():
+    class WebsiteInfo(BaseModel):
+        name: str
+        url: HttpUrl
+        description: str | None = None
+        created_at: datetime
+
+    class TestSignature(dspy.Signature):
+        website_info: WebsiteInfo = dspy.InputField()
+        summary: str = dspy.OutputField()
+
+    website_info = WebsiteInfo(
+        name="Example",
+        url="https://www.example.com",
+        description="Test website",
+        created_at=datetime(2021, 1, 1, 12, 0, 0),
+    )
+
+    serialized = serialize_object(website_info)
+
+    assert serialized["url"] == "https://www.example.com/"
+    assert serialized["created_at"] == "2021-01-01T12:00:00"
+
+    json_str = orjson.dumps(serialized).decode()
+    reloaded = orjson.loads(json_str)
+    assert reloaded == serialized
+
+    predictor = Predict(TestSignature)
+    demo = {"website_info": website_info, "summary": "This is a test website."}
+    predictor.demos = [demo]
+
+    state = predictor.dump_state()
+    json_str = orjson.dumps(state).decode()
+    reloaded_state = orjson.loads(json_str)
+
+    demo_data = reloaded_state["demos"][0]
+    assert demo_data["website_info"]["url"] == "https://www.example.com/"
+    assert demo_data["website_info"]["created_at"] == "2021-01-01T12:00:00"
+
+
+def test_trace_size_limit():
+    program = Predict("question -> answer")
+    dspy.configure(lm=DummyLM([{"answer": "Paris"}]), max_trace_size=3)
+
+    for _ in range(10):
+        program(question="What is the capital of France?")
+
+    assert len(dspy.settings.trace) == 3
+
+
+def test_disable_trace():
+    program = Predict("question -> answer")
+    dspy.configure(lm=DummyLM([{"answer": "Paris"}]), trace=None)
+
+    for _ in range(10):
+        program(question="What is the capital of France?")
+
+    assert dspy.settings.trace is None
+
+
+def test_per_module_history_size_limit():
+    program = Predict("question -> answer")
+    dspy.configure(lm=DummyLM([{"answer": "Paris"}]), max_history_size=5)
+
+    for _ in range(10):
+        program(question="What is the capital of France?")
+    assert len(program.history) == 5
+
+
+def test_per_module_history_disabled():
+    program = Predict("question -> answer")
+    dspy.configure(lm=DummyLM([{"answer": "Paris"}]), disable_history=True)
+
+    for _ in range(10):
+        program(question="What is the capital of France?")
+    assert len(program.history) == 0
+
+def test_input_field_default_value():
+    class SpyLM(dspy.LM):
+        def __init__(self):
+            super().__init__("dummy")
+            self.calls = []
+
+        def __call__(self, prompt=None, messages=None, **kwargs):
+            self.calls.append({"messages": messages})
+            return ["[[ ## answer ## ]]\ntest"]
+
+    class SignatureWithDefault(dspy.Signature):
+        context: str = dspy.InputField(default="DEFAULT_CONTEXT")
+        question: str = dspy.InputField()
+        answer: str = dspy.OutputField()
+
+    lm = SpyLM()
+    dspy.configure(lm=lm)
+    predictor = Predict(SignatureWithDefault)
+    predictor(question="test")
+
+    user_message = lm.calls[0]["messages"][-1]["content"]
+    assert "DEFAULT_CONTEXT" in user_message

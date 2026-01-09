@@ -1,8 +1,8 @@
 # Use Cases
 
-We often get questions like "How are people using DSPy in practice?", both in production and for research. This list was created to collect a few pointers and to encourage others in the community to add their own work below.
+We often get questions like “How are people using DSPy in practice?”, both in production and for research. This list was created to collect a few pointers and to encourage others in the community to add their own work below.
 
-This list is ever expanding and highly incomplete (WIP)! We'll be adding a bunch more. If you would like to add your product or research to this list, please make a PR.
+This list is continuously growing. We regularly add new use cases and welcome community contributions. If you would like to add your product or research to this list, please submit a PR.
 
 ## A Few Company Use Cases
 
@@ -10,15 +10,16 @@ This list is ever expanding and highly incomplete (WIP)! We'll be adding a bunch
 |---|---|
 | **[JetBlue](https://www.jetblue.com/)** | Multiple chatbot use cases. [Blog](https://www.databricks.com/blog/optimizing-databricks-llm-pipelines-dspy) |
 | **[Replit](https://replit.com/)** | Synthesize diffs using code LLMs using a DSPy pipeline. [Blog](https://blog.replit.com/code-repair) |
-| **[Databricks](https://www.databricks.com/)** | Research, products, and customer solutions around LM Judges, RAG, classification, and other applications. [Blog](https://www.databricks.com/blog/dspy-databricks) [Blog II](https://www.databricks.com/customers/ddi) |
+| **[Databricks](https://www.databricks.com/)** | Research, products, and customer solutions around LM Judges, RAG, classification, and other applications. [Blog](https://www.databricks.com/blog/dspy-databricks), [Blog II](https://www.databricks.com/customers/ddi) |
 | **[Sephora](https://www.sephora.com/)** | Undisclosed agent usecases; perspectives shared in [DAIS Session](https://www.youtube.com/watch?v=D2HurSldDkE). |
 | **[Zoro UK](https://www.zoro.co.uk/)** | E-commerce applications around structured shopping. [Portkey Session](https://www.youtube.com/watch?v=_vGKSc1tekE) |
 | **[VMware](https://www.vmware.com/)** | RAG and other prompt optimization applications. [Interview in The Register.](https://www.theregister.com/2024/02/22/prompt_engineering_ai_models/) [Business Insider.](https://www.businessinsider.com/chaptgpt-large-language-model-ai-prompt-engineering-automated-optimizer-2024-3) |
 | **[Haize Labs](https://www.haizelabs.com/)** | Automated red-teaming for LLMs. [Blog](https://blog.haizelabs.com/posts/dspy/) |
-| **[Plastic Labs](https://www.plasticlabs.ai/)** | Different pipelines within Honcho. [Blog](https://blog.plasticlabs.ai/blog/User-State-is-State-of-the-Art) |
+| **[Plastic Labs](https://www.plasticlabs.ai/)** | R&D pipelines for Honcho. [Blog](https://blog.plasticlabs.ai/blog/User-State-is-State-of-the-Art) |
 | **[PingCAP](https://pingcap.com/)** | Building a knowledge graph. [Article](https://www.pingcap.com/article/building-a-graphrag-from-wikipedia-page-using-dspy-openai-and-tidb-vector-database/) |
 | **[Salomatic](https://langtrace.ai/blog/case-study-how-salomatic-used-langtrace-to-build-a-reliable-medical-report-generation-system)** | Enriching medical reports using DSPy. [Blog](https://langtrace.ai/blog/case-study-how-salomatic-used-langtrace-to-build-a-reliable-medical-report-generation-system) |
 | **[Truelaw](https://www.youtube.com/watch?v=O0F3RAWZNfM)** | How Truelaw builds bespoke LLM pipelines for law firms using DSPy. [Podcast](https://www.youtube.com/watch?v=O0F3RAWZNfM) |
+| **[STChealth](https://stchealth.com/)** | Using DSPy for entity resolution including human-readable rationale for decisions. |
 | **[Moody's](https://www.moodys.com/)** | Leveraging DSPy to optimize RAG systems, LLM-as-a-Judge, and agentic systems for financial workflows. |
 | **[Normal Computing](https://www.normalcomputing.com/)** | Translate specs from chip companies from English to intermediate formal languages |
 | **[Procure.FYI](https://www.procure.fyi/)** | Process messy, publicly available technology spending and pricing data via DSPy. |
@@ -32,8 +33,10 @@ This list is ever expanding and highly incomplete (WIP)! We'll be adding a bunch
 | **[Isoform.ai](https://isoform.ai)** | Building custom integrations using DSPy. |
 | **[Trampoline AI](https://trampoline.ai)** | Uses DSPy to power their data-augmentation and LM pipelines. |
 | **[Pretrain](https://pretrain.com)** | Uses DSPy to automatically optimize AI performance towards user-defined tasks based on uploaded examples. |
+| **[Spindle AI](https://spindle.ai)** | Turns natural-language constrained optimization problems into solvable mathematical programs whose candidate solutions are scenarios. |
+| **[Infinitus](https://www.infinitus.ai/product/ai-agents/)** | Leverages DSPy to build and optimize healthcare AI agents |
 
-WIP. This list mainly includes companies that have public posts or have OKed being included for specific products so far.
+This list represents companies that have publicly shared their use cases or have provided permission to be included. It reflects a selection of the many industry applications of DSPy currently in production.
 
 
 ## A Few Papers Using DSPy
@@ -53,6 +56,10 @@ WIP. This list mainly includes companies that have public posts or have OKed bei
 | **[DSPy Assertions](https://arxiv.org/abs/2312.13382)** | Various applications of imposing hard and soft constraints on LM outputs |
 | **[DSPy Guardrails](https://boxiyu.github.io/assets/pdf/DSPy_Guardrails.pdf)** | Reduce the attack success rate of CodeAttack, decreasing from 75% to 5% |
 | **[Co-STORM](https://arxiv.org/pdf/2408.15232)** | Collaborative STORM: Generate Wikipedia-like articles through collaborative discourse among users and multiple LM agents |
+| **[MedVAL](https://arxiv.org/abs/2507.03152)** | Expert-level validation of AI-generated medical text with scalable language models |
+| **[Neural @ ArchEHR-QA 2025](https://aclanthology.org/2025.bionlp-share.13.pdf)** | Runner up method at 2025 BioNLP Shared Task Workshop
+
+This list is regularly updated with new research publications using DSPy.
 
 ## A Few Repositories (or other OSS examples) using DSPy
 
@@ -79,8 +86,9 @@ WIP. This list mainly includes companies that have public posts or have OKed bei
 | **RAG example using DSPy, Gradio, FastAPI, and Ollama**| [Github](https://github.com/diicellman/dspy-gradio-rag) |
 | **Synthetic Data Generation**| [Github](https://colab.research.google.com/drive/1CweVOu0qhTC0yOfW5QkLDRIKuAuWJKEr?usp=sharing) |
 | **Self Discover**| [Github](https://colab.research.google.com/drive/1GkAQKmw1XQgg5UNzzy8OncRe79V6pADB?usp=sharing) |
+| **MedVAL**| [Github](https://github.com/StanfordMIMI/MedVAL) |
 
-TODO: This list in particular is highly incomplete. There are a couple dozen other good ones.
+This list showcases some of the open-source projects and repositories using DSPy, with many more examples available in the community.
 
 ## A Few Providers, Integrations, and related Blog Releases
 

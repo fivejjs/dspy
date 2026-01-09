@@ -1,10 +1,16 @@
 import json
-import subprocess
-from typing import Any, Dict, List, Optional
+import logging
 import os
+import subprocess
+from os import PathLike
+from types import TracebackType
+from typing import Any
 
-class InterpreterError(ValueError):
+logger = logging.getLogger(__name__)
+
+class InterpreterError(RuntimeError):
     pass
+
 
 class PythonInterpreter:
     r"""
@@ -16,27 +22,149 @@ class PythonInterpreter:
     Example Usage:
     ```python
     code_string = "print('Hello'); 1 + 2"
-    interp = PythonInterpreter()
-    output = interp(code_string)
-    print(output)  # If final statement is non-None, prints the numeric result, else prints captured output
-    interp.shutdown()
+    with PythonInterpreter() as interp:
+        output = interp(code_string) # If final statement is non-None, prints the numeric result, else prints captured output
     ```
     """
 
     def __init__(
         self,
-        deno_command: Optional[List[str]] = None
+        deno_command: list[str] | None = None,
+        enable_read_paths: list[PathLike | str] | None = None,
+        enable_write_paths: list[PathLike | str] | None = None,
+        enable_env_vars: list[str] | None = None,
+        enable_network_access: list[str] | None = None,
+        sync_files: bool = True,
     ) -> None:
+        """
+        Args:
+            deno_command: command list to launch Deno.
+            enable_read_paths: Files or directories to allow reading from in the sandbox. 
+            enable_write_paths: Files or directories to allow writing to in the sandbox. 
+                All write paths will also be able to be read from for mounting.
+            enable_env_vars: Environment variable names to allow in the sandbox.
+            enable_network_access: Domains or IPs to allow network access in the sandbox.
+            sync_files: If set, syncs changes within the sandbox back to original files after execution.
+        """
         if isinstance(deno_command, dict):
             deno_command = None  # no-op, just a guard in case someone passes a dict
-        self.deno_command = deno_command or [
-            "deno", "run", "--allow-read", self._get_runner_path()
-        ]
+
+        self.enable_read_paths = enable_read_paths or []
+        self.enable_write_paths = enable_write_paths or []
+        self.enable_env_vars = enable_env_vars or []
+        self.enable_network_access = enable_network_access or []
+        self.sync_files = sync_files
+        # TODO later on add enable_run (--allow-run) by proxying subprocess.run through Deno.run() to fix 'emscripten does not support processes' error
+
+        if deno_command:
+            self.deno_command = list(deno_command)
+        else:
+            args = ["deno", "run"]
+
+            # Allow reading runner.js and explicitly enabled paths
+            allowed_read_paths = [self._get_runner_path()]
+
+            # Also allow reading Deno's cache directory so Pyodide can load its files
+            deno_dir = self._get_deno_dir()
+            if deno_dir:
+                allowed_read_paths.append(deno_dir)
+
+            if self.enable_read_paths:
+                allowed_read_paths.extend(str(p) for p in self.enable_read_paths)
+            if self.enable_write_paths:
+                allowed_read_paths.extend(str(p) for p in self.enable_write_paths)
+            args.append(f"--allow-read={','.join(allowed_read_paths)}")
+
+            self._env_arg  = ""
+            if self.enable_env_vars:
+                user_vars = [str(v).strip() for v in self.enable_env_vars]
+                args.append("--allow-env=" + ",".join(user_vars))
+                self._env_arg = ",".join(user_vars)
+            if self.enable_network_access:
+                args.append(f"--allow-net={','.join(str(x) for x in self.enable_network_access)}")
+            if self.enable_write_paths:
+                args.append(f"--allow-write={','.join(str(x) for x in self.enable_write_paths)}")
+
+            args.append(self._get_runner_path())
+
+            # For runner.js to load in env vars
+            if self._env_arg:
+                args.append(self._env_arg)
+            self.deno_command = args
+
         self.deno_process = None
+        self._mounted_files = False
+
+    _deno_dir_cache = None
+
+    @classmethod
+    def _get_deno_dir(cls) -> str | None:
+        if cls._deno_dir_cache:
+            return cls._deno_dir_cache
+
+        if "DENO_DIR" in os.environ:
+            cls._deno_dir_cache = os.environ["DENO_DIR"]
+            return cls._deno_dir_cache
+
+        try:
+            # Attempt to find deno in path or use just "deno"
+            # We can't easily know which 'deno' will be used if not absolute, but 'deno' is a safe bet
+            result = subprocess.run(
+                ["deno", "info", "--json"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode == 0:
+                info = json.loads(result.stdout)
+                cls._deno_dir_cache = info.get("denoDir")
+                return cls._deno_dir_cache
+        except Exception:
+            logger.warning("Unable to find the Deno cache dir.")
+            pass
+
+        return None
 
     def _get_runner_path(self) -> str:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(current_dir, "runner.js")
+
+    def _mount_files(self):
+        if self._mounted_files:
+            return
+        paths_to_mount = []
+        if self.enable_read_paths:
+            paths_to_mount.extend(self.enable_read_paths)
+        if self.enable_write_paths:
+            paths_to_mount.extend(self.enable_write_paths)
+        if not paths_to_mount:
+            return
+        for path in paths_to_mount:
+            if not path:
+                continue
+            if not os.path.exists(path):
+                if self.enable_write_paths and path in self.enable_write_paths:
+                    open(path, "a").close()
+                else:
+                    raise FileNotFoundError(f"Cannot mount non-existent file: {path}")
+            virtual_path = f"/sandbox/{os.path.basename(path)}"
+            mount_msg = json.dumps({"mount_file": str(path), "virtual_path": virtual_path})
+            self.deno_process.stdin.write(mount_msg + "\n")
+            self.deno_process.stdin.flush()
+        self._mounted_files = True
+
+    def _sync_files(self):
+        if not self.enable_write_paths or not self.sync_files:
+            return
+        for path in self.enable_write_paths:
+            virtual_path = f"/sandbox/{os.path.basename(path)}"
+            sync_msg = json.dumps({
+                "sync_file": virtual_path,
+                "host_file": str(path)
+            })
+            self.deno_process.stdin.write(sync_msg + "\n")
+            self.deno_process.stdin.flush()
+
 
     def _ensure_deno_process(self) -> None:
         if self.deno_process is None or self.deno_process.poll() is not None:
@@ -46,7 +174,9 @@ class PythonInterpreter:
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    encoding="UTF-8",
+                    env=os.environ.copy()
                 )
             except FileNotFoundError as e:
                 install_instructions = (
@@ -59,7 +189,7 @@ class PythonInterpreter:
                 )
                 raise InterpreterError(install_instructions) from e
 
-    def _inject_variables(self, code: str, variables: Dict[str, Any]) -> str:
+    def _inject_variables(self, code: str, variables: dict[str, Any]) -> str:
         # Insert Python assignments for each variable at the top of the code
         injected_lines = []
         for key, value in variables.items():
@@ -77,7 +207,7 @@ class PythonInterpreter:
         elif isinstance(value, (int, float, bool)):
             return str(value)
         elif value is None:
-            return 'None'
+            return "None"
         elif isinstance(value, list) or isinstance(value, dict):
             return json.dumps(value)
         else:
@@ -86,11 +216,12 @@ class PythonInterpreter:
     def execute(
         self,
         code: str,
-        variables: Optional[Dict[str, Any]] = None,
+        variables: dict[str, Any] | None = None,
     ) -> Any:
         variables = variables or {}
         code = self._inject_variables(code, variables)
         self._ensure_deno_process()
+        self._mount_files()
 
         # Send the code as JSON
         input_data = json.dumps({"code": code})
@@ -121,18 +252,35 @@ class PythonInterpreter:
         if "error" in result:
             error_msg = result["error"]
             error_type = result.get("errorType", "Sandbox Error")
-            if error_type == "SyntaxError":
+            if error_type == "FinalAnswer":
+                # The `FinalAnswer` trick to receive output from the sandbox interpreter,
+                # just simply replace the output with the arguments.
+                result["output"] = result.get("errorArgs", None)
+            elif error_type == "SyntaxError":
                 raise SyntaxError(f"Invalid Python syntax. message: {error_msg}")
             else:
-                raise InterpreterError(f"{error_type}: {error_msg}")
+                raise InterpreterError(f"{error_type}: {result.get('errorArgs') or error_msg}")
 
-        # If there's no error, return the "output" field
+        # If there's no error or got `FinalAnswer`, return the "output" field
+        self._sync_files()
         return result.get("output", None)
+
+    def __enter__(self):
+        return self
+
+    # All exception fields are ignored and the runtime will automatically re-raise the exception
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc_val: BaseException | None,
+        _exc_tb: TracebackType | None,
+    ):
+        self.shutdown()
 
     def __call__(
         self,
         code: str,
-        variables: Optional[Dict[str, Any]] = None,
+        variables: dict[str, Any] | None = None,
     ) -> Any:
         return self.execute(code, variables)
 

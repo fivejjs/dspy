@@ -1,10 +1,10 @@
 import random
 from collections import defaultdict
-from typing import Any, Dict, Union
+from typing import Any
 
 import numpy as np
 
-from dspy.adapters.chat_adapter import FieldInfoWithName, field_header_pattern, format_fields
+from dspy.adapters.chat_adapter import FieldInfoWithName, field_header_pattern
 from dspy.clients.lm import LM
 from dspy.dsp.utils.utils import dotdict
 from dspy.signatures.field import OutputField
@@ -19,14 +19,13 @@ class DummyLM(LM):
     Mode 1: List of dictionaries
 
     If a list of dictionaries is provided, the dummy model will return the next dictionary
-    in the list for each request, formatted according to the `format_fields` function.
-    from the chat adapter.
+    in the list for each request, formatted according to the `format_field_with_value` function.
 
     Example:
 
     ```
     lm = DummyLM([{"answer": "red"}, {"answer": "blue"}])
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
     predictor("What color is the sky?")
     # Output:
     # [[## answer ##]]
@@ -41,11 +40,11 @@ class DummyLM(LM):
 
     If a dictionary of dictionaries is provided, the dummy model will return the value
     corresponding to the key which is contained with the final message of the prompt,
-    formatted according to the `format_fields` function from the chat adapter.
+    formatted according to the `format_field_with_value` function from the chat adapter.
 
     ```
     lm = DummyLM({"What color is the sky?": {"answer": "blue"}})
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
     predictor("What color is the sky?")
     # Output:
     # [[## answer ##]]
@@ -59,7 +58,7 @@ class DummyLM(LM):
 
     ```
     lm = DummyLM([{"answer": "red"}], follow_examples=True)
-    dspy.settings.configure(lm=lm)
+    dspy.configure(lm=lm)
     predictor("What color is the sky?, demos=dspy.Example(input="What color is the sky?", output="blue"))
     # Output:
     # [[## answer ##]]
@@ -68,12 +67,18 @@ class DummyLM(LM):
 
     """
 
-    def __init__(self, answers: Union[list[dict[str, str]], dict[str, dict[str, str]]], follow_examples: bool = False):
+    def __init__(self, answers: list[dict[str, Any]] | dict[str, dict[str, Any]], follow_examples: bool = False, adapter=None):
         super().__init__("dummy", "chat", 0.0, 1000, True)
         self.answers = answers
         if isinstance(answers, list):
             self.answers = iter(answers)
         self.follow_examples = follow_examples
+
+        # Set adapter, defaulting to ChatAdapter
+        if adapter is None:
+            from dspy.adapters.chat_adapter import ChatAdapter
+            adapter = ChatAdapter()
+        self.adapter = adapter
 
     def _use_example(self, messages):
         # find all field names
@@ -88,19 +93,27 @@ class DummyLM(LM):
 
         # get the output from the last turn that has the output fields as headers
         final_input = messages[-1]["content"].split("\n\n")[0]
-        for input, output in zip(reversed(messages[:-1]), reversed(messages)):
+        for input, output in zip(reversed(messages[:-1]), reversed(messages), strict=False):
             if any(field in output["content"] for field in output_fields) and final_input in input["content"]:
                 return output["content"]
 
     @with_callbacks
     def __call__(self, prompt=None, messages=None, **kwargs):
-        def format_answer_fields(field_names_and_values: Dict[str, Any]):
-            return format_fields(
-                fields_with_values={
-                    FieldInfoWithName(name=field_name, info=OutputField()): value
-                    for field_name, value in field_names_and_values.items()
-                }
-            )
+        def format_answer_fields(field_names_and_values: dict[str, Any]):
+            fields_with_values = {
+                FieldInfoWithName(name=field_name, info=OutputField()): value
+                for field_name, value in field_names_and_values.items()
+            }
+            # The reason why DummyLM needs an adapter is because it needs to know which output format to mimic.
+            # Normally LMs should not have any knowledge of an adapter, because the output format is defined in the prompt.
+            adapter = self.adapter
+
+            # Try to use role="assistant" if the adapter supports it (like JSONAdapter)
+            try:
+                return adapter.format_field_with_value(fields_with_values, role="assistant")
+            except TypeError:
+                # Fallback for adapters that don't support role parameter (like ChatAdapter)
+                return adapter.format_field_with_value(fields_with_values)
 
         # Build the request.
         outputs = []
@@ -122,13 +135,15 @@ class DummyLM(LM):
 
             # Logging, with removed api key & where `cost` is None on cache hit.
             kwargs = {k: v for k, v in kwargs.items() if not k.startswith("api_")}
-            entry = dict(prompt=prompt, messages=messages, kwargs=kwargs)
-            entry = dict(**entry, outputs=outputs, usage=0)
-            entry = dict(**entry, cost=0)
-            self.history.append(entry)
-            self.update_global_history(entry)
+            entry = {"prompt": prompt, "messages": messages, "kwargs": kwargs}
+            entry = {**entry, "outputs": outputs, "usage": 0}
+            entry = {**entry, "cost": 0}
+            self.update_history(entry)
 
         return outputs
+
+    async def acall(self, prompt=None, messages=None, **kwargs):
+        return self.__call__(prompt=prompt, messages=messages, **kwargs)
 
     def get_convo(self, index):
         """Get the prompt + answer from the ith message."""
@@ -139,7 +154,7 @@ def dummy_rm(passages=()) -> callable:
     if not passages:
 
         def inner(query: str, *, k: int, **kwargs):
-            assert False, "No passages defined"
+            raise ValueError("No passages defined")
 
         return inner
     max_length = max(map(len, passages)) + 100
@@ -151,8 +166,8 @@ def dummy_rm(passages=()) -> callable:
         query_vec = vectorizer([query])[0]
         scores = passage_vecs @ query_vec
         largest_idx = (-scores).argsort()[:k]
-        # return dspy.Prediction(passages=[passages[i] for i in largest_idx])
-        return [dotdict(dict(long_text=passages[i])) for i in largest_idx]
+
+        return [dotdict(long_text=passages[i]) for i in largest_idx]
 
     return inner
 
@@ -170,7 +185,7 @@ class DummyVectorizer:
     def _hash(self, gram):
         """Hashes a string using a polynomial hash function."""
         h = 1
-        for coeff, c in zip(self.coeffs, gram):
+        for coeff, c in zip(self.coeffs, gram, strict=False):
             h = h * coeff + ord(c)
             h %= self.P
         return h % self.max_length
